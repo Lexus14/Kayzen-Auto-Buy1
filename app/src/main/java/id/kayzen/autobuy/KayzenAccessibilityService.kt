@@ -17,6 +17,7 @@ class KayzenAccessibilityService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("kayzen_settings", MODE_PRIVATE) }
     private var lastScanAt = 0L
+    private var lastEventScanAt = 0L
     private var candidateAmount: Int? = null
     private var consecutive = 0
     private var clickedThisSession = false
@@ -24,14 +25,14 @@ class KayzenAccessibilityService : AccessibilityService() {
     private val scanRunnable = object : Runnable {
         override fun run() {
             if (isMonitoring() && !clickedThisSession) scanScreen()
-            handler.postDelayed(this, 1500)
+            handler.postDelayed(this, 700)
         }
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         createChannel()
-        setStatus("Accessibility aktif. Tekan Mulai Pemantauan di aplikasi.", "Layanan aksesibilitas terhubung.")
+        setStatus("Accessibility aktif. Pemantauan siap.", "Layanan aksesibilitas terhubung.")
         handler.post(scanRunnable)
     }
 
@@ -39,8 +40,8 @@ class KayzenAccessibilityService : AccessibilityService() {
         if (!isMonitoring() || clickedThisSession) return
         if (event?.packageName?.toString() != "id.dana") return
         val now = System.currentTimeMillis()
-        if (now - lastScanAt < 1000) return
-        lastScanAt = now
+        if (now - lastEventScanAt < 250) return
+        lastEventScanAt = now
         scanScreen()
     }
 
@@ -58,6 +59,9 @@ class KayzenAccessibilityService : AccessibilityService() {
 
     private fun scanScreen() {
         if (!isMonitoring()) return
+        val now = System.currentTimeMillis()
+        if (now - lastScanAt < 250) return
+        lastScanAt = now
         val root = rootInActiveWindow ?: return
         if (root.packageName?.toString() != "id.dana") return
 
@@ -74,7 +78,6 @@ class KayzenAccessibilityService : AccessibilityService() {
         if (match == null) {
             candidateAmount = null
             consecutive = 0
-            setStatus("Memindai DANA Deals… belum ada target yang memenuhi syarat.", "Pemindaian " + timestamp() + ": belum ada kartu voucher yang cocok.")
             return
         }
 
@@ -83,7 +86,7 @@ class KayzenAccessibilityService : AccessibilityService() {
             candidateAmount = amount
             consecutive = 1
         }
-        setStatus("Target $amount Diamond terdeteksi ($consecutive/3).", "Target $amount Diamond terbaca pada " + timestamp() + "; menunggu tiga pemindaian.")
+        setStatus("Target $amount Diamond terdeteksi ($consecutive/3).", "Target $amount Diamond terbaca pada " + timestamp() + "; memverifikasi kecocokan.")
         if (consecutive < 3) return
 
         val clickable = findClickableAncestor(card, 3)
@@ -95,14 +98,14 @@ class KayzenAccessibilityService : AccessibilityService() {
                 clickedThisSession = true
                 prefs.edit().putBoolean("monitor_enabled", false).apply()
                 setStatus("Kartu $amount Diamond berhasil dibuka. Periksa detail secara manual.", "Klik kartu $amount Diamond berhasil pada " + timestamp() + ". Pemantauan dihentikan.")
-                notifyUser("Kartu voucher dibuka", "$amount Diamond terdeteksi. Periksa detail; pembayaran tetap manual.")
+                notifyUser("VOUCHER TERDETEKSI", "$amount Diamond — kartu berhasil dibuka. Periksa detail secara manual.")
             } else {
-                setStatus("Klik kartu tidak berhasil. Silakan buka kartu secara manual.", "Aksi klik ditolak oleh tampilan DANA.")
-                notifyUser("Klik tidak berhasil", "Target $amount Diamond ditemukan. Silakan ketuk manual.")
+                setStatus("Target $amount Diamond ditemukan. Ketuk kartu secara manual.", "Target cocok, tetapi aksi klik tidak berhasil.")
+                notifyUser("TARGET DITEMUKAN", "$amount Diamond tersedia. Silakan ketuk kartu secara manual.")
             }
         } else {
-            setStatus("Target $amount Diamond ditemukan, tetapi area klik tidak aman. Ketuk manual.", "Target ditemukan tetapi node klik tidak cocok; tidak ada klik dilakukan.")
-            notifyUser("Target terdeteksi", "$amount Diamond ditemukan. Ketuk kartu secara manual.")
+            setStatus("Target $amount Diamond ditemukan. Ketuk kartu secara manual.", "Target cocok tetapi area klik tidak aman; tidak ada klik dilakukan.")
+            notifyUser("TARGET DITEMUKAN", "$amount Diamond tersedia. Silakan ketuk kartu secara manual.")
         }
         candidateAmount = null
         consecutive = 0
@@ -172,7 +175,10 @@ class KayzenAccessibilityService : AccessibilityService() {
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel("kayzen_monitor", "Kayzen Monitor", NotificationManager.IMPORTANCE_HIGH)
+            val channel = NotificationChannel("kayzen_monitor", "Peringatan Voucher Kayzen", NotificationManager.IMPORTANCE_HIGH).apply {
+                description = "Notifikasi cepat saat target voucher DANA terdeteksi"
+                enableVibration(true)
+            }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
@@ -186,6 +192,8 @@ class KayzenAccessibilityService : AccessibilityService() {
             Notification.Builder(this)
         }
         manager.notify(7290, builder.setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(title).setContentText(message).setAutoCancel(true).build())
+            .setContentTitle(title).setContentText(message).setAutoCancel(true)
+            .setPriority(Notification.PRIORITY_HIGH).setCategory(Notification.CATEGORY_STATUS)
+            .setVibrate(longArrayOf(0, 250, 120, 250)).build())
     }
 }
