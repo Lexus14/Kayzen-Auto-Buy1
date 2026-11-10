@@ -22,6 +22,17 @@ import java.util.Date
 import java.util.Locale
 
 class KayzenAccessibilityService : AccessibilityService() {
+    companion object {
+        @Volatile private var activeService: KayzenAccessibilityService? = null
+        fun testAlert(): Boolean {
+            val service = activeService ?: return false
+            service.showPopup("UJI NOTIFIKASI", "Notifikasi dan floating pop-up Kayzen berfungsi.")
+            service.notifyUser("UJI NOTIFIKASI", "Notifikasi Kayzen berhasil dikirim.")
+            service.setStatus("Uji notifikasi berhasil dikirim.", "Tes notifikasi manual pada " + service.timestamp() + ".")
+            return true
+        }
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("kayzen_settings", MODE_PRIVATE) }
     private var lastScanAt = 0L
@@ -42,9 +53,11 @@ class KayzenAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        activeService = this
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createChannel()
         setStatus("Accessibility aktif. Pemantauan siap.", "Layanan aksesibilitas terhubung.")
+        handler.removeCallbacks(scanRunnable)
         handler.post(scanRunnable)
     }
 
@@ -65,6 +78,7 @@ class KayzenAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         handler.removeCallbacks(scanRunnable)
         hidePopup()
+        if (activeService === this) activeService = null
         super.onDestroy()
     }
 
@@ -75,8 +89,17 @@ class KayzenAccessibilityService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (now - lastScanAt < 250) return
         lastScanAt = now
-        val root = rootInActiveWindow ?: return
-        if (root.packageName?.toString() != "id.dana") return
+        val root = rootInActiveWindow
+        if (root == null) {
+            setStatus("Menunggu tampilan DANA…", "Layar aktif belum menyediakan accessibility root.")
+            return
+        }
+        if (root.packageName?.toString() != "id.dana") {
+            setStatus("Menunggu halaman DANA Deals…", "Aplikasi aktif bukan DANA (" + (root.packageName?.toString() ?: "paket tidak diketahui") + ").")
+            candidateAmount = null
+            consecutive = 0
+            return
+        }
 
         var match: Pair<Int, AccessibilityNodeInfo>? = null
         for (amount in listOf(7290, 355, 100)) {
@@ -91,6 +114,7 @@ class KayzenAccessibilityService : AccessibilityService() {
         if (match == null) {
             candidateAmount = null
             consecutive = 0
+            setStatus("DANA terbaca — belum menemukan target voucher.", "Halaman DANA terbaca pada " + timestamp() + ", tetapi teks kartu belum cocok dengan filter.")
             return
         }
 
@@ -102,26 +126,24 @@ class KayzenAccessibilityService : AccessibilityService() {
         setStatus("Target $amount Diamond terdeteksi ($consecutive/3).", "Target $amount Diamond terbaca pada " + timestamp() + "; memverifikasi kecocokan.")
         if (consecutive < 3) return
 
-        val clickable = findClickableAncestor(card, 3)
+        val clickable = findClickableAncestor(card, 4)
         val clickableText = clickable?.let { normalize(collectText(it)) } ?: ""
+        val message = "$amount Diamond tersedia. Periksa kartu voucher; pembayaran tetap manual."
         if (clickable != null && clickable.isEnabled &&
             containsAmount(clickableText, amount) && hasExplicitAction(clickableText)) {
             val success = clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             if (success) {
                 clickedThisSession = true
                 prefs.edit().putBoolean("monitor_enabled", false).apply()
-                val message = "$amount Diamond — kartu berhasil dibuka. Periksa detail secara manual."
                 setStatus("Kartu $amount Diamond berhasil dibuka. Periksa detail secara manual.", "Klik kartu $amount Diamond berhasil pada " + timestamp() + ". Pemantauan dihentikan.")
-                showPopup("VOUCHER TERDETEKSI", message)
-                notifyUser("VOUCHER TERDETEKSI", message)
+                showPopup("VOUCHER TERDETEKSI", "$amount Diamond — kartu dibuka. Periksa detail secara manual.")
+                notifyUser("VOUCHER TERDETEKSI", "$amount Diamond — kartu dibuka. Periksa detail secara manual.")
             } else {
-                val message = "$amount Diamond tersedia. Silakan ketuk kartu secara manual."
                 setStatus("Target $amount Diamond ditemukan. Ketuk kartu secara manual.", "Target cocok, tetapi aksi klik tidak berhasil.")
                 showPopup("TARGET DITEMUKAN", message)
                 notifyUser("TARGET DITEMUKAN", message)
             }
         } else {
-            val message = "$amount Diamond tersedia. Silakan ketuk kartu secara manual."
             setStatus("Target $amount Diamond ditemukan. Ketuk kartu secara manual.", "Target cocok tetapi area klik tidak aman; tidak ada klik dilakukan.")
             showPopup("TARGET DITEMUKAN", message)
             notifyUser("TARGET DITEMUKAN", message)
@@ -180,17 +202,18 @@ class KayzenAccessibilityService : AccessibilityService() {
                 android.graphics.PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                x = dp(14)
                 y = dp(42)
                 width = resources.displayMetrics.widthPixels - dp(28)
             }
             try {
-                windowManager?.addView(container, params)
+                val wm = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
+                wm.addView(container, params)
                 popupView = container
                 val timeout = Runnable { hidePopup() }
                 popupTimeout = timeout
                 handler.postDelayed(timeout, 9000)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                setStatus("Floating pop-up gagal ditampilkan.", "Overlay error: " + (e.message ?: "tidak diketahui"))
                 popupView = null
             }
         }
@@ -207,21 +230,23 @@ class KayzenAccessibilityService : AccessibilityService() {
     }
 
     private fun findTargetContainer(root: AccessibilityNodeInfo, amount: Int): AccessibilityNodeInfo? {
-        val textNodes = mutableListOf<AccessibilityNodeInfo>()
+        val candidates = mutableListOf<AccessibilityNodeInfo>()
         fun walk(node: AccessibilityNodeInfo, depth: Int) {
             if (depth > 18) return
             val own = normalize(listOfNotNull(node.text?.toString(), node.contentDescription?.toString()).joinToString(" "))
-            if (containsAmount(own, amount) && own.contains("diamond")) textNodes.add(node)
+            if (containsAmount(own, amount) || own.contains("diamond")) candidates.add(node)
             for (i in 0 until node.childCount) node.getChild(i)?.let { walk(it, depth + 1) }
         }
         walk(root, 0)
-        for (textNode in textNodes) {
+        for (textNode in candidates) {
             var current: AccessibilityNodeInfo? = textNode
-            repeat(7) {
+            repeat(9) {
                 val candidate = current ?: return@repeat
                 val text = normalize(collectText(candidate))
-                if (text.length <= 350 && containsAmount(text, amount) && text.contains("diamond") &&
-                    (hasExplicitAction(text) || text.contains("habis"))) return candidate
+                if (text.length in 1..700 && containsAmount(text, amount) &&
+                    text.contains("diamond") && (hasExplicitAction(text) || text.contains("habis"))) {
+                    return candidate
+                }
                 current = candidate.parent
             }
         }
@@ -244,7 +269,7 @@ class KayzenAccessibilityService : AccessibilityService() {
     private fun collectText(node: AccessibilityNodeInfo): String {
         val parts = mutableListOf<String>()
         fun walk(n: AccessibilityNodeInfo, depth: Int) {
-            if (depth > 8) return
+            if (depth > 10) return
             n.text?.toString()?.let { if (it.isNotBlank()) parts.add(it) }
             n.contentDescription?.toString()?.let { if (it.isNotBlank()) parts.add(it) }
             for (i in 0 until n.childCount) n.getChild(i)?.let { walk(it, depth + 1) }
@@ -273,6 +298,7 @@ class KayzenAccessibilityService : AccessibilityService() {
             val channel = NotificationChannel("kayzen_monitor", "Peringatan Voucher Kayzen", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Notifikasi cepat dan pop-up saat target voucher DANA terdeteksi"
                 enableVibration(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
@@ -286,9 +312,10 @@ class KayzenAccessibilityService : AccessibilityService() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
-        manager.notify(7290, builder.setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(title).setContentText(message).setAutoCancel(true)
-            .setPriority(Notification.PRIORITY_HIGH).setCategory(Notification.CATEGORY_STATUS)
-            .setVibrate(longArrayOf(0, 250, 120, 250)).build())
+        manager.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+            builder.setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title).setContentText(message).setAutoCancel(true)
+                .setPriority(Notification.PRIORITY_HIGH).setCategory(Notification.CATEGORY_STATUS)
+                .setVibrate(longArrayOf(0, 250, 120, 250)).build())
     }
 }
