@@ -24,7 +24,6 @@ class MainActivity : Activity() {
     private lateinit var accessView: TextView
     private lateinit var logView: TextView
     private lateinit var monitorButton: Button
-    private lateinit var danaButton: Button
     private val handler = Handler(Looper.getMainLooper())
     private val bg = Color.rgb(12, 18, 34)
     private val panel = Color.rgb(25, 35, 57)
@@ -47,36 +46,32 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(22), dp(28), dp(22), dp(24))
         }
-        val brand = TextView(this).apply {
+        root.addView(TextView(this).apply {
             text = "K A Y Z E N"
             textSize = 13f
             letterSpacing = .24f
             setTextColor(cyan)
             gravity = Gravity.CENTER
             typeface = Typeface.DEFAULT_BOLD
-        }
-        val title = TextView(this).apply {
+        })
+        root.addView(TextView(this).apply {
             text = "AUTO BUY"
             textSize = 31f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             typeface = Typeface.create("sans-serif", Typeface.BOLD)
-            setPadding(0, dp(3), 0, 0)
-        }
-        val version = TextView(this).apply {
-            text = "SMART VOUCHER MONITOR  •  VERSION 2.5"
+        })
+        root.addView(TextView(this).apply {
+            text = "SMART VOUCHER MONITOR  •  VERSION 2.6.1"
             textSize = 10f
             letterSpacing = .08f
             setTextColor(muted)
             gravity = Gravity.CENTER
             setPadding(0, dp(4), 0, dp(24))
-        }
-        root.addView(brand)
-        root.addView(title)
-        root.addView(version)
+        })
 
         val statusCard = card()
-        val statusLabel = label("MONITORING STATUS")
+        statusCard.addView(label("MONITORING STATUS"))
         statusView = TextView(this).apply {
             textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
@@ -88,7 +83,6 @@ class MainActivity : Activity() {
             setTextColor(muted)
             setPadding(0, dp(5), 0, 0)
         }
-        statusCard.addView(statusLabel)
         statusCard.addView(statusView)
         statusCard.addView(accessView)
         root.addView(statusCard, marginParams(bottom = 14))
@@ -104,7 +98,7 @@ class MainActivity : Activity() {
                 .apply()
             refreshDashboard()
         }
-        danaButton = actionButton("BUKA APLIKASI DANA", Color.rgb(42, 57, 83), Color.WHITE)
+        val danaButton = actionButton("BUKA APLIKASI DANA", Color.rgb(42, 57, 83), Color.WHITE)
         danaButton.setOnClickListener {
             val launch = packageManager.getLaunchIntentForPackage("id.dana")
             if (launch != null) {
@@ -118,6 +112,15 @@ class MainActivity : Activity() {
         }
         controls.addView(monitorButton, marginParams(top = 12, bottom = 9))
         controls.addView(danaButton)
+        val testButton = actionButton("UJI NOTIFIKASI + POP-UP", Color.rgb(35, 104, 116), Color.WHITE)
+        testButton.setOnClickListener {
+            val ok = KayzenAccessibilityService.testAlert()
+            if (!ok) {
+                prefs.edit().putString("last_status", "Layanan Accessibility belum terhubung.").putString("last_log", "Tes gagal: aktifkan ulang Accessibility Kayzen.").apply()
+            }
+            refreshDashboard()
+        }
+        controls.addView(testButton, marginParams(top = 9))
         val settings = actionButton("PENGATURAN AKSESIBILITAS", Color.rgb(42, 57, 83), Color.WHITE)
         settings.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         controls.addView(settings, marginParams(top = 9))
@@ -133,14 +136,13 @@ class MainActivity : Activity() {
         activityCard.addView(logView)
         root.addView(activityCard, marginParams(bottom = 14))
 
-        val safety = TextView(this).apply {
-            text = "SAFE MODE  •  Kayzen hanya mendeteksi dan membuka kartu voucher yang cocok. Checkout, pembayaran, PIN, OTP, dan CAPTCHA tetap dilakukan secara manual."
+        root.addView(TextView(this).apply {
+            text = "SAFE MODE  •  Kayzen hanya mendeteksi dan membuka kartu voucher yang cocok. Checkout, pembayaran, PIN, OTP, dan CAPTCHA tetap manual."
             textSize = 11f
             setTextColor(muted)
             gravity = Gravity.CENTER
             setPadding(dp(8), dp(8), dp(8), dp(8))
-        }
-        root.addView(safety)
+        })
         setContentView(root)
         refreshDashboard()
     }
@@ -190,35 +192,21 @@ class MainActivity : Activity() {
         setPadding(dp(17), dp(16), dp(17), dp(16))
         background = rounded(panel, 18)
     }
-
     private fun label(value: String) = TextView(this).apply {
-        text = value
-        textSize = 11f
-        letterSpacing = .12f
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(muted)
+        text = value; textSize = 11f; letterSpacing = .12f
+        typeface = Typeface.DEFAULT_BOLD; setTextColor(muted)
     }
-
     private fun actionButton(value: String, color: Int, textColor: Int) = Button(this).apply {
-        text = value
-        textSize = 13f
-        isAllCaps = false
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(textColor)
-        background = rounded(color, 13)
-        minHeight = dp(52)
-        stateListAnimator = null
+        text = value; textSize = 13f; isAllCaps = false
+        typeface = Typeface.DEFAULT_BOLD; setTextColor(textColor)
+        background = rounded(color, 13); minHeight = dp(52); stateListAnimator = null
     }
-
     private fun rounded(color: Int, radius: Int) = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = dp(radius).toFloat()
+        setColor(color); cornerRadius = dp(radius).toFloat()
     }
-
     private fun marginParams(top: Int = 0, bottom: Int = 0) =
         LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(top); bottomMargin = dp(bottom)
         }
-
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 }
