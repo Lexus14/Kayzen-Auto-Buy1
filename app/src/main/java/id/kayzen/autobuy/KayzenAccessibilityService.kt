@@ -4,11 +4,19 @@ import android.accessibilityservice.AccessibilityService
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.LinearLayout
+import android.widget.TextView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -21,6 +29,9 @@ class KayzenAccessibilityService : AccessibilityService() {
     private var candidateAmount: Int? = null
     private var consecutive = 0
     private var clickedThisSession = false
+    private var popupView: View? = null
+    private var popupTimeout: Runnable? = null
+    private var windowManager: WindowManager? = null
 
     private val scanRunnable = object : Runnable {
         override fun run() {
@@ -31,6 +42,7 @@ class KayzenAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         createChannel()
         setStatus("Accessibility aktif. Pemantauan siap.", "Layanan aksesibilitas terhubung.")
         handler.post(scanRunnable)
@@ -52,6 +64,7 @@ class KayzenAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         handler.removeCallbacks(scanRunnable)
+        hidePopup()
         super.onDestroy()
     }
 
@@ -97,18 +110,100 @@ class KayzenAccessibilityService : AccessibilityService() {
             if (success) {
                 clickedThisSession = true
                 prefs.edit().putBoolean("monitor_enabled", false).apply()
+                val message = "$amount Diamond — kartu berhasil dibuka. Periksa detail secara manual."
                 setStatus("Kartu $amount Diamond berhasil dibuka. Periksa detail secara manual.", "Klik kartu $amount Diamond berhasil pada " + timestamp() + ". Pemantauan dihentikan.")
-                notifyUser("VOUCHER TERDETEKSI", "$amount Diamond — kartu berhasil dibuka. Periksa detail secara manual.")
+                showPopup("VOUCHER TERDETEKSI", message)
+                notifyUser("VOUCHER TERDETEKSI", message)
             } else {
+                val message = "$amount Diamond tersedia. Silakan ketuk kartu secara manual."
                 setStatus("Target $amount Diamond ditemukan. Ketuk kartu secara manual.", "Target cocok, tetapi aksi klik tidak berhasil.")
-                notifyUser("TARGET DITEMUKAN", "$amount Diamond tersedia. Silakan ketuk kartu secara manual.")
+                showPopup("TARGET DITEMUKAN", message)
+                notifyUser("TARGET DITEMUKAN", message)
             }
         } else {
+            val message = "$amount Diamond tersedia. Silakan ketuk kartu secara manual."
             setStatus("Target $amount Diamond ditemukan. Ketuk kartu secara manual.", "Target cocok tetapi area klik tidak aman; tidak ada klik dilakukan.")
-            notifyUser("TARGET DITEMUKAN", "$amount Diamond tersedia. Silakan ketuk kartu secara manual.")
+            showPopup("TARGET DITEMUKAN", message)
+            notifyUser("TARGET DITEMUKAN", message)
         }
         candidateAmount = null
         consecutive = 0
+    }
+
+    private fun showPopup(title: String, message: String) {
+        handler.post {
+            hidePopup()
+            val density = resources.displayMetrics.density
+            fun dp(v: Int) = (v * density).toInt()
+            val container = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(18), dp(15), dp(18), dp(14))
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(20, 31, 52))
+                    cornerRadius = dp(18).toFloat()
+                    setStroke(dp(1), Color.rgb(54, 214, 220))
+                }
+                elevation = dp(12).toFloat()
+                isClickable = true
+            }
+            val heading = TextView(this).apply {
+                text = "◆  $title"
+                textSize = 14f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.rgb(54, 214, 220))
+            }
+            val body = TextView(this).apply {
+                text = message
+                textSize = 14f
+                setTextColor(Color.WHITE)
+                setPadding(0, dp(8), 0, dp(10))
+            }
+            val close = TextView(this).apply {
+                text = "TUTUP"
+                textSize = 12f
+                gravity = Gravity.END
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.rgb(92, 220, 155))
+                setPadding(dp(8), dp(4), 0, 0)
+                setOnClickListener { hidePopup() }
+            }
+            container.addView(heading)
+            container.addView(body)
+            container.addView(close)
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                android.graphics.PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                x = dp(14)
+                y = dp(42)
+                width = resources.displayMetrics.widthPixels - dp(28)
+            }
+            try {
+                windowManager?.addView(container, params)
+                popupView = container
+                val timeout = Runnable { hidePopup() }
+                popupTimeout = timeout
+                handler.postDelayed(timeout, 9000)
+            } catch (_: Exception) {
+                popupView = null
+            }
+        }
+    }
+
+    private fun hidePopup() {
+        popupTimeout?.let { handler.removeCallbacks(it) }
+        popupTimeout = null
+        val current = popupView
+        popupView = null
+        if (current != null) {
+            try { windowManager?.removeView(current) } catch (_: Exception) { }
+        }
     }
 
     private fun findTargetContainer(root: AccessibilityNodeInfo, amount: Int): AccessibilityNodeInfo? {
@@ -176,7 +271,7 @@ class KayzenAccessibilityService : AccessibilityService() {
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel("kayzen_monitor", "Peringatan Voucher Kayzen", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Notifikasi cepat saat target voucher DANA terdeteksi"
+                description = "Notifikasi cepat dan pop-up saat target voucher DANA terdeteksi"
                 enableVibration(true)
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
