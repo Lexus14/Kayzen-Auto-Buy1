@@ -14,7 +14,7 @@ android {
         applicationId = "id.kayzen.autobuy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.3"
+        versionCode = 3
+        versionName = "2.4"
     }
 }
